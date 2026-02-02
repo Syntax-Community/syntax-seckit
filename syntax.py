@@ -9,14 +9,15 @@ from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 
 USER_AGENT = "Mozilla/5.0 (SyntaxCommunity; Unrestricted Security Toolkit; Linux) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
 def scan_port(target_ip, ports_str):
     print(f"[+] Memulai pemindaian port pada: {target_ip}")
-    ports = [int(p.strip()) for p in ports_str.split(',') if p.strip().isdigit()]
+    ports = range(1, 65536)
     open_ports = []
     
     for port in ports:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
+        sock.settimeout(0.01)
         result = sock.connect_ex((target_ip, port))
         
         if result == 0:
@@ -26,10 +27,9 @@ def scan_port(target_ip, ports_str):
                 service = "unknown"
             print(f"    [OPEN] Port {port}/{service}")
             open_ports.append(port)
-        sock.close()
-        
+        sock.close()    
     if not open_ports:
-        print("    [-] Semua port yang diperiksa tertutup atau tidak dapat dijangkau.")
+        print("    [-] Tidak ada port yang terbuka ditemukan di antara 1-65535.")
     return open_ports
 
 def check_header(target_url):
@@ -75,7 +75,6 @@ def crawl_for_subdomains(target_url, max_depth=1):
         
     base_domain = urlparse(target_url).netloc
     found_subdomains = set()
-    
     queue = [(target_url, 0)]
     visited = set()
 
@@ -153,7 +152,7 @@ def main():
     # --- Perintah Port Scan ---
     parser_port = subparsers.add_parser('portscan', help='Memindai port pada IP target.')
     parser_port.add_argument('ip', help='Alamat IP target.')
-    parser_port.add_argument('-p', '--ports', required=True, help='Daftar port yang dipisahkan koma (misal: 21,22,80,443).')
+    parser_port.add_argument('-p', '--ports', default='80,443', help='Daftar port yang akan dipindai (hanya untuk kompatibilitas lama, diabaikan untuk pemindaian penuh).')
     parser_port.set_defaults(func=lambda args: scan_port(args.ip, args.ports))
 
     # --- Perintah Header ---
