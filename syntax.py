@@ -15,7 +15,6 @@ visited_urls = set()
 found_endpoints = []
 url_queue = []
 TARGET_URL_BASE = None
-
 init(autoreset=True)
 
 def is_internal_link(base_url, link_url):
