@@ -8,6 +8,7 @@ import sys
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from colorama import Fore, Style, init
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 USER_AGENT = "Syntax-Toolkit/4.5 (Unrestricted Security Toolkit; Linux) AppleWebKit/537.36"
 MAX_PAGES = 20
@@ -17,6 +18,13 @@ url_queue = []
 TARGET_URL_BASE = None
 init(autoreset=True)
 
+IMPORTANT_PORTS = {
+    21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "domain", 80: "http", 
+    110: "pop3", 139: "netbios-ssn", 143: "imap", 443: "https", 445: "microsoft-ds", 
+    464: "kpasswd5", 587: "smtp-auth", 993: "imaps", 995: "pop3s", 1433: "ms-sql-s", 
+    3389: "ms-wbt-server", 389: "ldap", 1494: "ica"
+}
+
 def is_internal_link(base_url, link_url):
     try:
         base_domain = urlparse(base_url).netloc
@@ -25,27 +33,51 @@ def is_internal_link(base_url, link_url):
     except:
         return False
 
+def _check_single_port(target_ip, port, timeout):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    result = sock.connect_ex((target_ip, port))
+    
+    if result == 0:
+        try:
+            service = socket.getservbyport(port, 'tcp')
+        except OSError:
+            service = "unknown"
+        sock.close()
+        return port, service
+    sock.close()
+    return None, None
+
 def scan_port(target_ip, ports_str):
     print(f"{Fore.GREEN}Memulai pemindaian port pada {Fore.YELLOW}{target_ip}{Style.RESET_ALL}")
-    ports = range(1, 65536)
-    open_ports = []
     
-    for port in ports:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.1)
-        result = sock.connect_ex((target_ip, port))
+    ports_to_scan = sorted(list(IMPORTANT_PORTS.keys()))
+    all_found_ports = {}
+    
+    MAX_WORKERS_PORT_SCAN = 500
+    TIMEOUT_PORT_SCAN = 0.5
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS_PORT_SCAN) as executor:
+        future_to_port = {executor.submit(_check_single_port, target_ip, port, TIMEOUT_PORT_SCAN): port for port in ports_to_scan}
         
-        if result == 0:
-            try:
-                service = socket.getservbyport(port, 'tcp')
-            except OSError:
-                service = "unknown"
-            print(f"    [OPEN] Port {port}/{service}")
-            open_ports.append(port)
-        sock.close()    
-    if not open_ports:
-        print(f"    {Fore.RED}[-] {Fore.YELLOW}Tidak ada port yang terbuka ditemukan di antara 1-65535.{Style.RESET_ALL}")
-    return open_ports
+        for future in as_completed(future_to_port):
+            port, service = future.result()
+            
+            if port is not None and port in IMPORTANT_PORTS:
+                all_found_ports[port] = IMPORTANT_PORTS[port].upper()
+            
+    sorted_ports = sorted(all_found_ports.keys())
+    
+    if not sorted_ports:
+        print(f"    {Fore.RED}[-] {Fore.YELLOW}Tidak ada port yang terbuka.{Style.RESET_ALL}")
+    else:
+        print(f"\n{Fore.BLUE}---===({Style.RESET_ALL} {Fore.YELLOW}PORT DITEMUKAN{Style.RESET_ALL} {Fore.BLUE})===---{Style.RESET_ALL}")
+        for port in sorted_ports:
+            service_name = all_found_ports[port]
+            print(f"    [OPEN] Port {port}/{service_name}")
+        print(f"\n{Fore.GREEN}Pemindaian port selesai. Ditemukan {len(sorted_ports)} port penting terbuka.")
+        
+    return sorted_ports
 
 def check_header(target_url):
     print(f"{Fore.GREEN}Memeriksa header untuk: {Fore.YELLOW}{target_url}{Style.RESET_ALL}")
@@ -159,7 +191,7 @@ def crawl_website(target_url, max_depth=MAX_PAGES):
 
 
 def crawl_for_subdomains(target_url, max_depth=1):
-    print(f"{Fore.CYAN}[*]{Fore.GREEN} Memulai crawling subdomain (Depth: {max_depth}) ke: {Fore.YELLOW}{target_url}{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}[*]{Fore.GREEN} Mencari subdomain ke: {Fore.YELLOW}{target_url}{Style.RESET_ALL}")
     if not target_url.startswith(('http://', 'https://')):
         target_url = 'http://' + target_url
         
@@ -197,7 +229,7 @@ def crawl_for_subdomains(target_url, max_depth=1):
             continue
 
     if found_subdomains:
-        print(f"\n    {Fore.RED}[Domain ditemukan]{Style.RESET_ALL}")
+        print(f"\n{Fore.BLUE}---===({Style.RESET_ALL} {Fore.YELLOW}DOMAIN DITEMUKAN{Style.RESET_ALL} {Fore.BLUE})===---{Style.RESET_ALL}")
         for sub in sorted(list(found_subdomains)):
             print(f"      {Fore.GREEN}[+] {Style.RESET_ALL}{sub}")
     else:
@@ -239,7 +271,8 @@ def hash_data(data, algo):
         print(f"    {Fore.RED}[ERROR] {Fore.GREEN}Algoritma hashing '{algo}' tidak didukung. {Fore.YELLOW}Coba: md5, sha1, sha256, sha512.{Style.RESET_ALL}")
 
 def encode_base64(data):
-    encoded_bytes = base64.b64encode(data.encode('utf-8'))
+    data_to_encode = data.replace(' ', '') if not any(c.isspace() for c in data) else data
+    encoded_bytes = base64.b64encode(data_to_encode.encode('utf-8'))
     print(f"    [{Fore.GREEN}BASE64 {Fore.CYAN}ENCODED{Style.RESET_ALL}]{Fore.RED}: {Fore.YELLOW}{encoded_bytes.decode('utf-8')}{Style.RESET_ALL}")
 
 def decode_base64(data):
@@ -256,28 +289,27 @@ def main():
     )
     subparsers = parser.add_subparsers(dest='command', required=True)
 
-    parser_port = subparsers.add_parser('portscan', help='Memindai port pada IP target.')
+    parser_ip = subparsers.add_parser('ipscan', help='Mendapatkan semua alamat IP yang terkait dengan nama host/URL.')
+    parser_ip.add_argument('target', help='Target website/domain.')
+    parser_ip.set_defaults(func=lambda args: scan_website_ips(args.target))
+
+    parser_port = subparsers.add_parser('portscan', help='Memindai port PRIORITAS secara PARALEL pada IP target (CEPAT, DIURUTKAN DI AKHIR).')
     parser_port.add_argument('ip', help='Alamat IP target.')
-    parser_port.add_argument('-p', '--ports', default='80,443', help='[DIABAIKAN] Daftar port yang akan dipindai (Pemindaian penuh 1-65535 selalu dilakukan).')
-    parser_port.set_defaults(func=lambda args: scan_port(args.ip, args.ports))
+    parser_port.set_defaults(func=lambda args: scan_port(args.ip, None))
 
     parser_header = subparsers.add_parser('header', help='Memeriksa header HTTP dari URL target.')
     parser_header.add_argument('url', help='URL target (misal: example.com atau https://example.com).')
     parser_header.set_defaults(func=lambda args: check_header(args.url))
     
     parser_crawl = subparsers.add_parser('crawl', help='Crawler agresif untuk mengumpulkan link dan detail form.')
-    parser_crawl.add_argument('url', help='URL awal untuk memulai *crawling* (misal: https://domain.com).')
+    parser_crawl.add_argument('url', help='URL target (misal: https://domain.com).')
     parser_crawl.add_argument('--max-pages', type=int, default=MAX_PAGES, help=f'Jumlah maksimum halaman untuk dikunjungi. Default: {MAX_PAGES}.')
     parser_crawl.set_defaults(func=lambda args: crawl_website(args.url, args.max_pages))
 
     parser_sub = subparsers.add_parser('subdomain', help='Enumerator Subdomain berbasis *Crawling* tautan.')
-    parser_sub.add_argument('url', help='URL awal untuk memulai *crawling* (misal: https://domain.com).')
+    parser_sub.add_argument('url', help='URL target (misal: https://domain.com).')
     parser_sub.add_argument('--depth', type=int, default=1, help='Kedalaman *crawling* maksimum (Default: 1).')
     parser_sub.set_defaults(func=lambda args: crawl_for_subdomains(args.url, args.depth))
-
-    parser_ip = subparsers.add_parser('ipscan', help='Mendapatkan semua alamat IP yang terkait dengan nama host/URL.')
-    parser_ip.add_argument('target', help='Target website/domain.')
-    parser_ip.set_defaults(func=lambda args: scan_website_ips(args.target))
 
     parser_hash = subparsers.add_parser('hash', help='Menghitung hash data.')
     parser_hash.add_argument('data', help='Data yang akan di-hash.')
@@ -302,16 +334,17 @@ def main():
         parser.print_help(sys.stderr)
         sys.exit(1)
         
-    args = parser.parse_args(sys.argv[1:])
+    args_list = sys.argv[1:]
+    if args_list and args_list[0] == 'portscan' and len(args_list) > 1:
+        args = parser.parse_args(args_list)
+    else:
+        args = parser.parse_args(sys.argv[1:])
         
     if hasattr(args, 'func'):
         args.func(args)
 
 if __name__ == "__main__":
-    
     try:
         main()
     except Exception as e:
-        print(f"\n[FATAL ERROR]: {e}")
-        print("Pastikan Anda telah menginstal dependensi: 'pip install requests beautifulsoup4 colorama'")
-        sys.exit(1)
+        pass
