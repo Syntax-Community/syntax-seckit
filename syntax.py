@@ -5,10 +5,14 @@ import requests
 import hashlib
 import base64
 import sys
+import ssl
+import dns.resolver
+import re
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from colorama import Fore, Style, init
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 USER_AGENT = "Syntax-Toolkit/4.5 (Unrestricted Security Toolkit; Linux) AppleWebKit/537.36"
 MAX_PAGES = 20
@@ -282,6 +286,91 @@ def decode_base64(data):
     except Exception as e:
         print(f"    {Fore.RED}[ERROR] {Fore.GREEN}Gagal mendekode Base64. {Fore.YELLOW}Pastikan input valid: {Style.RESET_ALL}")
 
+def enum_dns(domain):
+    """Enumerasi record DNS (A, MX, NS, TXT, CNAME)"""
+    parsed = urlparse(domain)
+    hostname = parsed.netloc or parsed.path
+    hostname = hostname.split('/')[0]
+    if ':' in hostname:
+        hostname = hostname.split(':')[0]
+
+    target = hostname.strip()
+    print(f"{Fore.GREEN}Mencari DNS records untuk {Fore.YELLOW}{target}{Style.RESET_ALL}")
+
+    dns_types = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'CNAME', 'SOA']
+    found_records = False
+
+    try:
+        for dns_type in dns_types:
+            try:
+                answers = dns.resolver.resolve(target, dns_type)
+                if answers:
+                    found_records = True
+                    print(f"\n{Fore.CYAN}[{dns_type} Records]{Style.RESET_ALL}")
+                    for answer in answers:
+                        print(f"    {Fore.GREEN}├─{Style.RESET_ALL} {answer}")
+            except dns.resolver.NoAnswer:
+                # no records for this type; continue
+                continue
+            except dns.resolver.NXDOMAIN:
+                print(f"    {Fore.RED}[ERROR] Domain '{target}' tidak ditemukan.{Style.RESET_ALL}")
+                # If NXDOMAIN, stop further queries
+                found_records = False
+                break
+            except Exception as e:
+                # other DNS-related errors (timeouts, SERVFAIL, etc.)
+                print(f"    {Fore.YELLOW}[WARN] Error while querying {dns_type}: {e}{Style.RESET_ALL}")
+                continue
+
+        if not found_records:
+            print(f"    {Fore.YELLOW}[-] Tidak ada DNS record ditemukan.{Style.RESET_ALL}")
+
+    except Exception as e:
+        print(f"    {Fore.RED}[ERROR] Gagal melakukan DNS enumeration: {e}{Style.RESET_ALL}")
+
+def check_ssl_cert(target_url):
+    """Cek informasi SSL/TLS certificate"""
+    print(f"{Fore.GREEN}Memeriksa SSL Certificate untuk {Fore.YELLOW}{target_url}{Style.RESET_ALL}")
+    
+    try:
+        hostname = urlparse(target_url).netloc if urlparse(target_url).netloc else target_url
+        if ':' in hostname:
+            hostname = hostname.split(':')[0]
+        
+        context = ssl.create_default_context()
+        with socket.create_connection((hostname, 443), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                cert = ssock.getpeercert()
+                
+                if cert:
+                    print(f"\n{Fore.BLUE}---===({Style.RESET_ALL} {Fore.YELLOW}SSL CERTIFICATE INFO{Style.RESET_ALL} {Fore.BLUE})===---{Style.RESET_ALL}")
+                    print(f"  {Fore.CYAN}[Subject]{Style.RESET_ALL}")
+                    for item in cert.get('subject', []):
+                        for key, val in item:
+                            print(f"    {Fore.GREEN}├─{Style.RESET_ALL} {key}: {val}")
+                    
+                    print(f"\n  {Fore.CYAN}[Issuer]{Style.RESET_ALL}")
+                    for item in cert.get('issuer', []):
+                        for key, val in item:
+                            print(f"    {Fore.GREEN}├─{Style.RESET_ALL} {key}: {val}")
+                    
+                    print(f"\n  {Fore.CYAN}[Validity]{Style.RESET_ALL}")
+                    print(f"    {Fore.GREEN}├─{Style.RESET_ALL} Valid From: {cert.get('notBefore', 'N/A')}")
+                    print(f"    {Fore.GREEN}├─{Style.RESET_ALL} Valid To: {cert.get('notAfter', 'N/A')}")
+                    
+                    if cert.get('subjectAltName'):
+                        print(f"\n  {Fore.CYAN}[Alternative Names]{Style.RESET_ALL}")
+                        for alt_name in cert.get('subjectAltName'):
+                            print(f"    {Fore.GREEN}├─{Style.RESET_ALL} {alt_name[1]}")
+    
+    except socket.gaierror:
+        print(f"    {Fore.RED}[ERROR] Tidak dapat resolve hostname '{hostname}'.{Style.RESET_ALL}")
+    except ssl.SSLError as e:
+        print(f"    {Fore.RED}[ERROR] SSL Error: {e}{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"    {Fore.RED}[ERROR] Gagal cek SSL certificate: {e}{Style.RESET_ALL}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Syntax-Seckit V4.5 - Toolkit security berbasis CLI. Prefix Utama: syntax",
@@ -293,7 +382,7 @@ def main():
     parser_ip.add_argument('target', help='Target website/domain.')
     parser_ip.set_defaults(func=lambda args: scan_website_ips(args.target))
 
-    parser_port = subparsers.add_parser('portscan', help='Memindai port PRIORITAS secara PARALEL pada IP target (CEPAT, DIURUTKAN DI AKHIR).')
+    parser_port = subparsers.add_parser('portscan', help='Memindai port penting yang terbuka.')
     parser_port.add_argument('ip', help='Alamat IP target.')
     parser_port.set_defaults(func=lambda args: scan_port(args.ip, None))
 
@@ -301,15 +390,23 @@ def main():
     parser_header.add_argument('url', help='URL target (misal: example.com atau https://example.com).')
     parser_header.set_defaults(func=lambda args: check_header(args.url))
     
-    parser_crawl = subparsers.add_parser('crawl', help='Crawler agresif untuk mengumpulkan link dan detail form.')
+    parser_crawl = subparsers.add_parser('crawl', help='Crawler untuk mengumpulkan link dan detail form.')
     parser_crawl.add_argument('url', help='URL target (misal: https://domain.com).')
     parser_crawl.add_argument('--max-pages', type=int, default=MAX_PAGES, help=f'Jumlah maksimum halaman untuk dikunjungi. Default: {MAX_PAGES}.')
     parser_crawl.set_defaults(func=lambda args: crawl_website(args.url, args.max_pages))
 
-    parser_sub = subparsers.add_parser('subdomain', help='Enumerator Subdomain berbasis *Crawling* tautan.')
+    parser_sub = subparsers.add_parser('subdomain', help='Enumerator Subdomain.')
     parser_sub.add_argument('url', help='URL target (misal: https://domain.com).')
     parser_sub.add_argument('--depth', type=int, default=1, help='Kedalaman *crawling* maksimum (Default: 1).')
     parser_sub.set_defaults(func=lambda args: crawl_for_subdomains(args.url, args.depth))
+
+    parser_dns = subparsers.add_parser('dns', help='Enumerasi DNS records (A, MX, NS, TXT, CNAME).')
+    parser_dns.add_argument('domain', help='Target domain (misal: example.com).')
+    parser_dns.set_defaults(func=lambda args: enum_dns(args.domain))
+
+    parser_ssl = subparsers.add_parser('ssl', help='Memeriksa informasi SSL/TLS certificate.')
+    parser_ssl.add_argument('url', help='Target URL (misal: https://example.com).')
+    parser_ssl.set_defaults(func=lambda args: check_ssl_cert(args.url))
 
     parser_hash = subparsers.add_parser('hash', help='Menghitung hash data.')
     parser_hash.add_argument('data', help='Data yang akan di-hash.')
