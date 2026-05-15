@@ -14,7 +14,6 @@ Toolkit pentesting & security audit berbasis CLI yang powerful dan mudah digunak
 - Web Crawler - Crawl website untuk mengumpulkan links, forms & endpoints
 - Header Checker - Analisis HTTP response headers
 - Subdomain Enumeration - Cari subdomain melalui link crawling
- - Subdomain Enumeration - Cari subdomain melalui link crawling
 
 **Utility:**
 - Hash Generator - MD5, SHA1, SHA256, SHA512
@@ -44,7 +43,6 @@ python syntax.py header <url>                 # Check HTTP response headers
 python syntax.py crawl <url> [--max-pages N]  # Crawl website (default: 20 halaman)
 python syntax.py subdomain <url> [--depth N]  # Find subdomains via crawling
 python syntax.py dork <filename> <filetype>   # Dork search
-# For path discovery and vulnerability analysis use `crawl` then manual testing
 ```
 
 ### Utility
