@@ -6,9 +6,11 @@ import hashlib
 import base64
 import sys
 import ssl
+import os
+import time
 import dns.resolver
 import re
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, quote_plus
 from bs4 import BeautifulSoup
 from colorama import Fore, Style, init
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -368,6 +370,144 @@ def check_ssl_cert(target_url):
         print(f"    {Fore.RED}[ERROR] Gagal cek SSL certificate: {e}{Style.RESET_ALL}")
 
 
+DORK_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def dork_search(filename, filetype):
+    """Dork search berdasarkan nama file dan filetype menggunakan DuckDuckGo."""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                from duckduckgo_search import DDGS
+        except ImportError:
+            print(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Library belum terpasang.")
+            print(f"  {Fore.YELLOW}[*]{Style.RESET_ALL} Jalankan: pip install ddgs")
+            return
+
+    query = f'"{filename}" filetype:{filetype}'
+    print(f"\n{Fore.BLUE}---===({Style.RESET_ALL} {Fore.YELLOW}DORK SEARCH{Style.RESET_ALL} {Fore.BLUE})===---{Style.RESET_ALL}")
+    print(f"  {Fore.CYAN}[*]{Style.RESET_ALL} Query   : {Fore.YELLOW}{query}{Style.RESET_ALL}")
+    print(f"  {Fore.CYAN}[*]{Style.RESET_ALL} Filetype : {Fore.GREEN}{filetype.upper()}{Style.RESET_ALL}")
+    print(f"  {Fore.CYAN}[*]{Style.RESET_ALL} Engine   : {Fore.MAGENTA}DuckDuckGo{Style.RESET_ALL}")
+    print(f"  {Fore.CYAN}[*]{Style.RESET_ALL} Mengambil hasil...\n")
+
+    page_size = 10
+    page_num = 1
+
+    # Ambil semua hasil sekaligus (max 50), paginasi dilakukan secara lokal
+    try:
+        with DDGS() as ddgs:
+            raw = list(ddgs.text(query, max_results=50))
+    except Exception as e:
+        print(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Gagal mengambil hasil DuckDuckGo: {e}")
+        return
+
+    # Konversi ke list of (title, url)
+    all_results = [(r.get('title', r.get('href', '')), r.get('href', '')) for r in raw if r.get('href')]
+
+    if not all_results:
+        print(f"  {Fore.RED}[-]{Style.RESET_ALL} Tidak ada hasil ditemukan untuk query ini.")
+        return
+
+    total = len(all_results)
+    print(f"  {Fore.GREEN}[+]{Style.RESET_ALL} Ditemukan {Fore.YELLOW}{total}{Style.RESET_ALL} hasil.\n")
+
+    # Fetch halaman pertama (indeks lokal)
+    start_idx = (page_num - 1) * page_size
+    current_page = all_results[start_idx:start_idx + page_size]
+
+    while True:
+        if not current_page:
+            print(f"  {Fore.RED}[-]{Style.RESET_ALL} Tidak ada hasil lagi.")
+            break
+
+        # Tampilkan hasil halaman saat ini
+        offset = (page_num - 1) * page_size
+        print(f"\n{Fore.BLUE}---===({Style.RESET_ALL} {Fore.YELLOW}HASIL HALAMAN {page_num}{Style.RESET_ALL} {Fore.BLUE})===---{Style.RESET_ALL}")
+        for i, (title, url) in enumerate(current_page, start=1):
+            num_label = f"{Fore.GREEN}[{offset + i:>2}]{Style.RESET_ALL}"
+            short_title = title[:60] + ('...' if len(title) > 60 else '')
+            print(f"  {num_label} {Fore.CYAN}{short_title}{Style.RESET_ALL}")
+            print(f"       {Fore.YELLOW}{url}{Style.RESET_ALL}")
+
+        print(f"\n{Fore.MAGENTA}[?]{Style.RESET_ALL} Masukkan nomor untuk download, "
+              f"{Fore.CYAN}'next'{Style.RESET_ALL} / {Fore.CYAN}'prev'{Style.RESET_ALL} untuk navigasi halaman, "
+              f"atau {Fore.RED}'exit'{Style.RESET_ALL} untuk keluar.")
+
+        choice = input(f"  {Fore.GREEN}>>> {Style.RESET_ALL}").strip().lower()
+
+        if choice == 'exit':
+            print(f"  {Fore.YELLOW}[*]{Style.RESET_ALL} Keluar dari dork search.")
+            break
+
+        elif choice == 'next':
+            next_page_num = page_num + 1
+            next_start = (next_page_num - 1) * page_size
+            next_page = all_results[next_start:next_start + page_size]
+            if not next_page:
+                print(f"  {Fore.RED}[-]{Style.RESET_ALL} Tidak ada hasil lagi di halaman berikutnya.")
+            else:
+                page_num = next_page_num
+                current_page = next_page
+
+        elif choice == 'prev':
+            if page_num <= 1:
+                print(f"  {Fore.YELLOW}[!]{Style.RESET_ALL} Sudah di halaman pertama.")
+            else:
+                page_num -= 1
+                prev_start = (page_num - 1) * page_size
+                current_page = all_results[prev_start:prev_start + page_size]
+
+        elif choice.isdigit():
+            num = int(choice)
+            real_index = num - offset - 1  # index dalam current_page
+            if 0 <= real_index < len(current_page):
+                title, url = current_page[real_index]
+                _download_file(url, filetype)
+            else:
+                print(f"  {Fore.RED}[!]{Style.RESET_ALL} Nomor tidak valid. Pilih antara {offset+1}-{offset+len(current_page)}.")
+        else:
+            print(f"  {Fore.RED}[!]{Style.RESET_ALL} Input tidak dikenal. Ketik nomor, 'next', atau 'exit'.")
+
+
+def _download_file(url, filetype):
+    """Download file dari URL yang dipilih."""
+    print(f"\n  {Fore.CYAN}[*]{Style.RESET_ALL} Mengunduh dari: {Fore.YELLOW}{url}{Style.RESET_ALL}")
+    try:
+        resp = requests.get(url, headers=DORK_HEADERS, timeout=30, stream=True)
+        resp.raise_for_status()
+
+        # Tentukan nama file
+        fname_from_url = url.split('/')[-1].split('?')[0]
+        if not fname_from_url or f'.{filetype}' not in fname_from_url.lower():
+            fname_from_url = f"dork_result.{filetype}"
+
+        save_path = os.path.join(os.getcwd(), fname_from_url)
+
+        with open(save_path, 'wb') as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        size_kb = os.path.getsize(save_path) / 1024
+        print(f"  {Fore.GREEN}[+]{Style.RESET_ALL} File berhasil disimpan: "
+              f"{Fore.YELLOW}{save_path}{Style.RESET_ALL} "
+              f"({Fore.GREEN}{size_kb:.1f} KB{Style.RESET_ALL})")
+
+    except requests.exceptions.HTTPError as e:
+        print(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} HTTP Error: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Gagal mengunduh file: {e}")
+    except Exception as e:
+        print(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Terjadi kesalahan: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Syntax-Seckit V4.5 - Toolkit security berbasis CLI. Prefix Utama: syntax",
@@ -423,6 +563,11 @@ def main():
             decode_base64(args.data)
             
     parser_b64.set_defaults(func=base64_handler)
+
+    parser_dork = subparsers.add_parser('dork', help='Google dorking file berdasarkan nama dan filetype.')
+    parser_dork.add_argument('filename', help='Nama file yang dicari (misal: "database backup").')
+    parser_dork.add_argument('filetype', help='Jenis/ekstensi file (misal: pdf, xlsx, sql, txt).')
+    parser_dork.set_defaults(func=lambda args: dork_search(args.filename, args.filetype))
 
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)

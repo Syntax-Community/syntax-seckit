@@ -25,7 +25,7 @@ Toolkit pentesting & security audit berbasis CLI yang powerful dan mudah digunak
 ```bash
 git clone https://github.com/username/syntax-seckit.git
 cd syntax-seckit
-pip install requests beautifulsoup4 colorama dnspython
+pip install -r requirements.txt
 ```
 
 ## Perintah Lengkap
@@ -43,6 +43,7 @@ python syntax.py ssl <url>                    # Check SSL certificate info
 python syntax.py header <url>                 # Check HTTP response headers
 python syntax.py crawl <url> [--max-pages N]  # Crawl website (default: 20 halaman)
 python syntax.py subdomain <url> [--depth N]  # Find subdomains via crawling
+python syntax.py dork <filename> <filetype>   # Dork search
 # For path discovery and vulnerability analysis use `crawl` then manual testing
 ```
 
