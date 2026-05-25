@@ -16,7 +16,7 @@ from colorama import Fore, Style, init
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-USER_AGENT = "Syntax-Toolkit/4.5 (Unrestricted Security Toolkit; Linux) AppleWebKit/537.36"
+USER_AGENT = "Syntax-Seckit/4.5 (Unrestricted Security Toolkit; Linux) AppleWebKit/537.36"
 MAX_PAGES = 20
 visited_urls = set()
 found_endpoints = []
