@@ -22,7 +22,7 @@ Toolkit pentesting & security audit berbasis CLI yang powerful dan mudah digunak
 ## Instalasi
 
 ```bash
-git clone https://github.com/username/syntax-seckit.git
+git clone https://github.com/Syntax-Community/syntax-seckit.git
 cd syntax-seckit
 pip install -r requirements.txt
 ```
